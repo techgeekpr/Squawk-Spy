@@ -8,31 +8,12 @@ local SquawkSpy = SquawkSpy
 local UI = {}
 SquawkSpy.UI = UI
 
-local MEDIA = "Interface\\AddOns\\SquawkSpy\\Textures\\"
-
--- The art in Textures\ belongs to the original Spy addon and is not shipped
--- with this one, so every file it would have used names a stock Blizzard
--- texture to fall back on.  Drop Spy's Textures folder in and you get Spy's
--- look; leave it out and the window still draws, just with the game's own art.
-local FALLBACK = {
-	["bar-flat.tga"]          = "Interface\\TargetingFrame\\UI-StatusBar",
-	["button-highlight.tga"]  = "Interface\\Buttons\\ButtonHilight-Square",
-	["button-left.tga"]       = "Interface\\Buttons\\UI-SpellbookIcon-PrevPage-Up",
-	["button-right.tga"]      = "Interface\\Buttons\\UI-SpellbookIcon-NextPage-Up",
-	["button-clear.tga"]      = "Interface\\Buttons\\UI-GroupLoot-Pass-Up",
-	["button-file.tga"]       = "Interface\\Icons\\INV_Misc_Note_01",
-	["button-on.tga"]         = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8",
-	["button-off.tga"]        = "Interface\\Buttons\\UI-GroupLoot-Pass-Up",
-	["resize-bottomright.tga"] = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up",
-}
-
+-- Spy's own artwork, read from wherever it actually lives.  Core.lua resolves
+-- it: your installed copy of Spy first, then this addon's own folder, then
+-- stock Blizzard art for anything it cannot find.
 local function media(file)
-	local path = MEDIA .. file
-	if SquawkSpy:TextureExists(path) then return path end
-	return FALLBACK[file] or path
+	return SquawkSpy:Texture(file)
 end
-
-local BAR_TEXTURE = media("bar-flat.tga")
 
 local function classColor(class)
 	return SquawkSpy.ClassColors[class] or SquawkSpy.ClassColors.UNKNOWN
@@ -85,6 +66,16 @@ local function createWindow(name, title, height, width)
 	f.TitleBar:SetBackdropColor(0, 0, 0, 1)
 	local border = SquawkSpy.db.Colors.Window.Title
 	f.TitleBar:SetBackdropBorderColor(border.r, border.g, border.b, border.a)
+
+	-- Spy's own title art, laid over the plain backdrop.  Only when Spy is
+	-- actually installed: falling back to a tooltip texture here would just
+	-- draw the same flat colour twice.
+	if SquawkSpy.db.WindowSkin == "industrial" and SquawkSpy:HasSpyMedia() then
+		f.TitleBar.Art = f.TitleBar:CreateTexture(nil, "BORDER")
+		f.TitleBar.Art:SetTexture(media("title-industrial.tga"))
+		f.TitleBar.Art:SetPoint("TOPLEFT", f.TitleBar, "TOPLEFT", 2, -2)
+		f.TitleBar.Art:SetPoint("BOTTOMRIGHT", f.TitleBar, "BOTTOMRIGHT", -2, 2)
+	end
 
 	-- On the title bar, not the window: the bar is a child frame with an
 	-- opaque backdrop, and a child draws over its parent's regions.
@@ -155,7 +146,7 @@ function UI:CreateRow(num)
 
 	row.StatusBar = CreateFrame("StatusBar", nil, row)
 	row.StatusBar:SetAllPoints(row)
-	row.StatusBar:SetStatusBarTexture(BAR_TEXTURE)
+	row.StatusBar:SetStatusBarTexture(media(SquawkSpy.db.BarTexture or "bar-flat.tga"))
 	row.StatusBar:SetStatusBarColor(0.5, 0.5, 0.5, 0.8)
 	row.StatusBar:SetMinMaxValues(0, 100)
 	row.StatusBar:SetValue(100)
@@ -599,8 +590,12 @@ function UI:CreateAlertWindow()
 	f:SetClampedToScreen(true)
 	f:SetMovable(true)
 	f:EnableMouse(true)
+	-- Spy draws its alert on its own background art; without Spy installed the
+	-- tooltip backdrop stands in, which is what the colour setting tints.
+	local alertArt = (SquawkSpy.db.WindowSkin == "industrial" and SquawkSpy:HasSpyMedia())
+		and media("alert-background.tga") or "Interface\\Tooltips\\UI-Tooltip-Background"
 	f:SetBackdrop({
-		bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", tile = true, tileSize = 8,
+		bgFile = alertArt, tile = true, tileSize = 8,
 		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8,
 		insets = { left = 2, right = 2, top = 2, bottom = 2 },
 	})

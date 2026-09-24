@@ -5,28 +5,54 @@ Warcraft: Forever** beta.
 
 Made by **Avoid Me** of **&lt;Squawk&gt;**.
 
-Inspired by [Spy](https://www.curseforge.com/wow/addons/spy) by **Immolation**
-and **Slipjack**. This is a rebuild, not a port: the windows, lists and
-workflow are deliberately Spy's, but the detection engine underneath is new,
-because Spy's cannot work on this client.
+## This is a re-work of Spy
 
-## Why the original Spy cannot simply be fixed
+[Spy](https://www.curseforge.com/wow/addons/spy-classic) was created by
+**Immolation** (Cho'gall US) and updated by **Slipjack**. It is their addon,
+their design and their artwork, and this project exists only because Spy
+existed first.
 
-Forever runs Classic content on the **Midnight (12.x) addon API**, and two
-changes there break Spy at the root:
+This is a re-work rather than a fork or a port. The windows, the lists, the
+alerts, the Kill on Sight workflow and the look on screen are all deliberately
+Spy's, because Spy got them right and there is no reason to invent a worse
+version. What is new is the engine underneath, which had to be rewritten from
+nothing, because **Spy's own detection cannot run on this client at all**:
 
-| Change | Effect |
+| Change in the Midnight (12.x) API | Effect on Spy |
 | --- | --- |
-| `COMBAT_LOG_EVENT_UNFILTERED` errors on `RegisterEvent` and `CombatLogGetCurrentEventInfo` is gone | Spy's primary detector is gone with it. It saw *every* enemy who acted anywhere in combat-log range, through walls and terrain, before they were ever rendered. Nothing available to an addon replaces that reach. |
+| `COMBAT_LOG_EVENT_UNFILTERED` errors on `RegisterEvent` and `CombatLogGetCurrentEventInfo` is gone | Spy's primary detector goes with it. It saw *every* enemy who acted anywhere in combat-log range, through walls and terrain, before they were ever rendered. Nothing available to an addon replaces that reach. |
 | SavedVariables are written but never restored | The KoS list, settings and player history would reset every session. |
-
-`WOW_PROJECT_ID` also reports retail here, so Classic-only libraries silently
-never load. This addon therefore has no Ace3, no LibStub and no external
-libraries at all.
+| `WOW_PROJECT_ID` reports retail | Classic-only libraries silently never load, so Ace3 and LibStub are unavailable. This addon has no external libraries at all. |
 
 Be clear-eyed about what that costs: detection here is **line of sight and
-render range**, not combat-log range. You will not get the old "someone is
-fighting two hills away" warning. Everything below is what can still be done.
+render range**, not combat-log range. You will not get Spy's old "someone is
+fighting two hills away" warning, and no addon on this client can give it to
+you. Everything below is what can still be done.
+
+## Artwork and sounds
+
+Spy's artwork and sounds are Immolation and Slipjack's work. Spy is published
+under no licence that grants redistribution, so **those files are not included
+in this repository** — they are not ours to hand out.
+
+They are not lost, though. Squawk Spy reads them from **your installed copy of
+Spy**, so if you have Spy in your AddOns folder you get its exact look and all
+of its alert sounds automatically, with nothing to configure:
+
+```
+Interface\AddOns\Spy\            <- read from here first
+Interface\AddOns\SquawkSpy\      <- or copy Textures\ and Sounds\ in here
+```
+
+Spy does **not** need to be enabled, and does not need to work on this client.
+The folder only has to be on disk, because a texture or sound path resolves
+through the file system and never consults the addon list.
+
+Each file is resolved on its own, so a partial copy still works. Anything that
+cannot be found falls back to stock Blizzard art, and a missing sound is simply
+silent — the addon is fully functional either way, just plainer.
+
+Run `/spy art` to see which folders were found and how many textures resolved.
 
 ## Detection
 
@@ -52,9 +78,10 @@ a different noise than a hunter you can see.
 
 - **Personal KoS** — mark anyone, with a note. Right-click any name in the
   window, use the target button, or `/spy kos <name>`.
-- **Guild KoS — shared across the whole guild.** Mark someone Guild KoS and
-  they are broadcast to every guildmate running the addon, note included, and
-  they keep it. The first person in the guild to get ganked warns everyone.
+- **Guild KoS — shared across the whole guild.** This is new; Spy had no
+  equivalent. Mark someone Guild KoS and they are broadcast to every guildmate
+  running the addon, note included, and they keep it. The first person in the
+  guild to get ganked warns everyone.
   - Keyed per guild, so an alt elsewhere does not inherit a list that means
     nothing there.
   - Every entry carries the time it was set and the **newest write wins**, so
@@ -70,12 +97,15 @@ a different noise than a hunter you can see.
 - **Main window** — nearby / last hour / all, class-coloured, with level,
   guild and time since seen, and a count in the title bar. Movable, resizable,
   scales.
-- **Alerts** — pop-up on detection, with its own placement, size and duration,
-  and different treatment for stealth, KoS and guild KoS.
+- **Alerts** — pop-up on detection, drawn on Spy's own alert background when
+  it is available, with its own placement, size and duration, and different
+  treatment for stealth, KoS and guild KoS.
 - **Statistics** — who you have seen, how often, kills and deaths against each
   player, sortable, with a footer summary.
 - **Target KoS button** — one click to mark or unmark your current target.
 - **Minimap and world map notes** for where a player was last seen.
+- All ten of Spy's alert sounds are selectable per alert type, and the bar and
+  title artwork can be switched between Spy's industrial look and a plain one.
 
 ## Installing
 
@@ -87,17 +117,6 @@ World of Warcraft\_classic_beta_\Interface\AddOns\
 
 Then run `Setup-SavedVariables.ps1` from inside it — see below, it matters on
 this client.
-
-### Artwork and sounds are not included
-
-`Textures\` and `Sounds\` are the original Spy addon's assets and are **not
-redistributed here**. The addon does not need them: every texture it would
-have used falls back to a stock Blizzard one, and an alert sound simply stays
-silent if the file is absent.
-
-If you own Spy and want its exact look and its alert sounds, copy Spy's
-`Textures` and `Sounds` folders into `SquawkSpy\` and they are picked up
-automatically — the resolver prefers Spy's file whenever it is actually there.
 
 ### Settings do not persist without the shim
 
@@ -135,19 +154,21 @@ when it happens.
 /spy gsync           ask the guild for the shared list now
 /spy plates          turn enemy nameplates on at the furthest distance allowed
 /spy clear           empty the current list
+/spy art             which Spy artwork and sounds were found, and where
 /spy diag            what this client actually exposes to the addon
 /spy reset           back to defaults
 ```
 
-`/spy diag` exists because this client is a moving target — it reports the
-combat log, nameplate API, addon messaging and the restore shim in a few
-lines, and will usually say why something is not working.
+`/spy diag` and `/spy art` exist because this client is a moving target. They
+report the combat log, nameplate API, addon messaging, the restore shim and
+the artwork search in a few lines, and will usually say why something is not
+working.
 
 ## Files
 
 | File | Contents |
 | --- | --- |
-| `Core.lua` | database, restore shim, lists, alerts, capability probing, slash commands |
+| `Core.lua` | database, restore shim, artwork and sound resolution, lists, alerts, capability probing, slash commands |
 | `Detect.lua` | every detection source and the one handler they funnel into |
 | `Guild.lua` | the guild-wide Kill on Sight list and its sync protocol |
 | `UI.lua` | main window, alert popup, target button, map notes |
@@ -157,9 +178,12 @@ lines, and will usually say why something is not working.
 
 ## Credits
 
-Rebuilt by **Avoid Me** of **&lt;Squawk&gt;**.
+**Spy** was created by **Immolation** and updated by **Slipjack**. The design,
+the layout, the artwork and the sounds are theirs. This addon is a re-work of
+it for a client Spy cannot run on, and it is not affiliated with or endorsed by
+them. Spy's artwork and sounds are not redistributed here.
 
-Inspired by, and modelled on, **Spy** by **Immolation** and **Slipjack**. The
-original addon's artwork and sounds remain theirs and are not included here.
+Re-worked by **Avoid Me** of **&lt;Squawk&gt;**.
 
-Released under the MIT licence.
+The code in this repository is released under the MIT licence. That licence
+covers this code only — it does not extend to Spy's artwork or sounds.

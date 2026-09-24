@@ -91,7 +91,7 @@ function Options:Initialize()
 
 	panel.Title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
 	panel.Title:SetPoint("TOPLEFT", panel, "TOPLEFT", 16, -16)
-	panel.Title:SetText("Spy " .. SquawkSpy.Version)
+	panel.Title:SetText("Squawk Spy " .. SquawkSpy.Version)
 
 	panel.SubTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	panel.SubTitle:SetPoint("TOPLEFT", panel.Title, "BOTTOMLEFT", 0, -6)
@@ -103,10 +103,14 @@ function Options:Initialize()
 	panel.Credit:SetPoint("TOPLEFT", panel.SubTitle, "BOTTOMLEFT", 0, -4)
 	panel.Credit:SetJustifyH("LEFT")
 	panel.Credit:SetWidth(580)
-	panel.Credit:SetText("|cffffd100Made by: Avoid Me|r |cff82c5ff<Squawk>|r   "
-		.. "|cff888888Inspired by the Spy addon by Immolation and Slipjack, rebuilt for this client.|r")
+	panel.Credit:SetText("|cffffd100Made by: Avoid Me|r |cff82c5ff<Squawk>|r|n"
+		.. "|cff888888A re-work of the |rSpy|cff888888 addon by |rImmolation|cff888888 and |rSlipjack|cff888888, "
+		.. "rebuilt for this client because Midnight closed the combat log Spy relied on.|n"
+		.. "Artwork and sounds are theirs, read from your installed copy of Spy "
+		.. "-- type |r/spy art|cff888888 to see what was found.|r")
 
-	local y = { [1] = -70, [2] = -70 }
+	-- The credit runs to three lines, so the controls start below it.
+	local y = { [1] = -104, [2] = -104 }
 	local x = { [1] = 20, [2] = 330 }
 	panel.Controls = {}
 

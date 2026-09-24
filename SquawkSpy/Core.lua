@@ -166,6 +166,10 @@ SquawkSpy.Defaults = {
 	announceGuildKoS = true,        -- print when a guildmate marks someone
 	guildKoSSound = "detected-kosguild.mp3",
 
+	-- Spy's own artwork, used when your installed copy of Spy provides it.
+	WindowSkin = "industrial",      -- "industrial" (Spy's art) or "classic"
+	BarTexture = "bar-flat.tga",    -- bar-flat.tga or bar-blend.tga
+
 	SoundOnDetection = true,
 	DetectionSound = "click",
 	DisplayWarnings = true,
@@ -969,9 +973,117 @@ function SquawkSpy:CycleDetectionSound()
 	SquawkSpy:Print("detection sound: " .. nextEntry.label)
 end
 
+-- ---------------------------------------------------------------------------
+-- media: Spy's own artwork and sounds
+-- ---------------------------------------------------------------------------
+
+-- This addon is a re-work of Spy, and it is meant to look and sound like Spy.
+-- Spy's artwork and sounds are Immolation and Slipjack's work, published under
+-- no licence that permits redistribution, so they are not shipped here.  They
+-- are read from your installed copy of Spy instead.
+--
+-- Spy does not need to be enabled, and does not need to work on this client --
+-- the folder only has to be on disk, because a texture or sound path resolves
+-- through the file system and never consults the addon list.  Anything that
+-- cannot be found falls back to stock Blizzard art, or to silence.
+local ROOTS = {
+	"Interface\\AddOns\\Spy\\",        -- your installed copy of Spy
+	"Interface\\AddOns\\SquawkSpy\\",  -- or copied in here
+}
+
+SquawkSpy.TextureFallback = {
+	["bar-flat.tga"]          = "Interface\\TargetingFrame\\UI-StatusBar",
+	["bar-blend.tga"]         = "Interface\\TargetingFrame\\UI-StatusBar",
+	["button-highlight.tga"]  = "Interface\\Buttons\\ButtonHilight-Square",
+	["button-left.tga"]       = "Interface\\Buttons\\UI-SpellbookIcon-PrevPage-Up",
+	["button-right.tga"]      = "Interface\\Buttons\\UI-SpellbookIcon-NextPage-Up",
+	["button-clear.tga"]      = "Interface\\Buttons\\UI-GroupLoot-Pass-Up",
+	["button-file.tga"]       = "Interface\\Icons\\INV_Misc_Note_01",
+	["button-crosshairs.tga"] = "Interface\\Minimap\\Tracking\\Target",
+	["button-exclaim.tga"]    = "Interface\\Icons\\INV_Misc_QuestionMark",
+	["button-exclaim1.tga"]   = "Interface\\Icons\\INV_Misc_QuestionMark",
+	["button-on.tga"]         = "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8",
+	["button-off.tga"]        = "Interface\\Buttons\\UI-GroupLoot-Pass-Up",
+	["IconBorder.tga"]        = "Interface\\Buttons\\UI-ActionButton-Border",
+	["alert-background.tga"]  = "Interface\\Tooltips\\UI-Tooltip-Background",
+	["alert-industrial.tga"]  = "Interface\\Tooltips\\UI-Tooltip-Background",
+	["title-industrial.tga"]  = "Interface\\Tooltips\\UI-Tooltip-Background",
+	["title-industrial2.tga"] = "Interface\\Tooltips\\UI-Tooltip-Background",
+	["title-industrial3.tga"] = "Interface\\Tooltips\\UI-Tooltip-Background",
+	["resize-bottomright.tga"]= "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up",
+	["resize-bottomleft.tga"] = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up",
+	["resize-topright.tga"]   = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up",
+	["resize-topleft.tga"]    = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up",
+	["resize-left.tga"]       = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up",
+	["resize-right.tga"]      = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up",
+}
+
+-- Probed once, because the answer cannot change while you are logged in.
+local mediaRoots
+local function roots()
+	if mediaRoots then return mediaRoots end
+	mediaRoots = {}
+	for _, root in ipairs(ROOTS) do
+		if SquawkSpy:TextureExists(root .. "Textures\\bar-flat.tga") then
+			mediaRoots[#mediaRoots + 1] = root
+		end
+	end
+	return mediaRoots
+end
+
+-- Resolved per file rather than per folder, so a partial copy still works.
+function SquawkSpy:Texture(file)
+	for _, root in ipairs(roots()) do
+		local path = root .. "Textures\\" .. file
+		if SquawkSpy:TextureExists(path) then return path end
+	end
+	return SquawkSpy.TextureFallback[file]
+end
+
+function SquawkSpy:HasSpyMedia()
+	return #roots() > 0
+end
+
+-- Says which artwork resolved and where from, because "the window looks plain"
+-- and "Spy is not installed where I thought" look identical on screen.
+function SquawkSpy:MediaDiagnostics()
+	local found = roots()
+	SquawkSpy:Print("---- artwork and sounds ----")
+	if #found == 0 then
+		SquawkSpy:Print("|cffff8000no Spy artwork found.|r Stock Blizzard art is being used and "
+			.. "alerts are silent. Install Spy alongside this addon, or copy its "
+			.. "Textures and Sounds folders into Interface\\AddOns\\SquawkSpy\\.")
+	else
+		for _, root in ipairs(found) do
+			SquawkSpy:Print(("|cff00ff00found:|r %s"):format(root))
+		end
+	end
+
+	local missing, total = {}, 0
+	for file in pairs(SquawkSpy.TextureFallback) do
+		total = total + 1
+		local resolved = false
+		for _, root in ipairs(found) do
+			if SquawkSpy:TextureExists(root .. "Textures\\" .. file) then resolved = true break end
+		end
+		if not resolved then missing[#missing + 1] = file end
+	end
+	SquawkSpy:Print(("textures: %d of %d from Spy, %d on stock art")
+		:format(total - #missing, total, #missing))
+	if #missing > 0 and #missing <= 8 then
+		SquawkSpy:Print("  falling back: " .. table.concat(missing, ", "))
+	end
+end
+
 function SquawkSpy:PlayMedia(file)
 	if not file or not SquawkSpy.db or not SquawkSpy.db.AlertSounds then return end
-	pcall(PlaySoundFile, "Interface\\AddOns\\SquawkSpy\\Sounds\\" .. file, "Master")
+	for _, root in ipairs(roots()) do
+		-- PlaySoundFile reports whether the file was actually there, which is the
+		-- only way to tell one root from another without playing both.
+		local ok, willPlay = pcall(PlaySoundFile, root .. "Sounds\\" .. file, "Master")
+		if ok and willPlay ~= false then return true end
+	end
+	return false
 end
 
 -- SetTexture never fails, so a missing file looks the same as a working one
@@ -1169,6 +1281,8 @@ local function handleSlash(msg)
 		end
 	elseif cmd == "diag" or cmd == "debug" then
 		SquawkSpy:Diagnostics()
+	elseif cmd == "art" or cmd == "media" then
+		SquawkSpy:MediaDiagnostics()
 	elseif cmd == "clear" then
 		SquawkSpy:ClearList()
 	elseif cmd == "lock" then

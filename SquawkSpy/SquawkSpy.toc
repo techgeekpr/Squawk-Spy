@@ -1,8 +1,9 @@
 ## Interface: 11601
 ## Title: Squawk Spy
-## Notes: Detects and alerts you to the presence of nearby enemy players. Inspired by the Spy addon by Immolation and Slipjack, rebuilt for WoW: Forever.
+## Notes: Detects and alerts you to the presence of nearby enemy players. A re-work of the Spy addon by Immolation and Slipjack, rebuilt for WoW: Forever. Artwork and sounds are theirs, read from your installed copy of Spy.
 ## Version: 2.0.0
-## Author: Avoid Me <Squawk>, inspired by Spy (Immolation, Slipjack)
+## Author: Avoid Me <Squawk>
+## X-Credits: A re-work of Spy, created by Immolation and updated by Slipjack. Spy's artwork and sounds remain their work and are not redistributed here.
 ## SavedVariables: SquawkSpyDB
 ## IconTexture: Interface\Icons\Ability_Creature_Cursed_02
 
