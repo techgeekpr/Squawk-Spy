@@ -1,0 +1,13 @@
+# Directory junctions to the game's SavedVariables folders -- machine specific,
+# and they point at every addon's data, so they must never be committed.
+SquawkSpy/SV1/
+SquawkSpy/SV2/
+SquawkSpy/SV3/
+
+# The original Spy addon's artwork and sounds.  Not ours to redistribute; the
+# addon falls back to stock Blizzard textures without them.
+SquawkSpy/Textures/
+SquawkSpy/Sounds/
+
+*.bak
+*.old

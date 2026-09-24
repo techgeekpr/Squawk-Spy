@@ -1,0 +1,37 @@
+## Interface: 11601
+## Title: Squawk Spy
+## Notes: Detects and alerts you to the presence of nearby enemy players. Inspired by the Spy addon by Immolation and Slipjack, rebuilt for WoW: Forever.
+## Version: 2.0.0
+## Author: Avoid Me <Squawk>, inspired by Spy (Immolation, Slipjack)
+## SavedVariables: SquawkSpyDB
+## IconTexture: Interface\Icons\Ability_Creature_Cursed_02
+
+# --- SavedVariables restore shim -------------------------------------------
+# The Forever beta writes SavedVariables correctly but never restores them,
+# so every addon starts each session with an empty database.  SV1..SV3 are
+# directory junctions to the WTF SavedVariables folders; loading our own file
+# as a normal addon file puts last session's data back.  Each Restore file
+# parks the snapshot so the next one does not overwrite it.
+SV1\SquawkSpy.lua
+Restore1.lua
+SV2\SquawkSpy.lua
+Restore2.lua
+SV3\SquawkSpy.lua
+Restore3.lua
+
+# Lists saved while the addon was still called SpyF, read once and carried
+# over by Core.lua.
+SV1\SpyF.lua
+Legacy1.lua
+SV2\SpyF.lua
+Legacy2.lua
+SV3\SpyF.lua
+Legacy3.lua
+
+Core.lua
+Detect.lua
+Guild.lua
+UI.lua
+Menu.lua
+Stats.lua
+Options.lua
