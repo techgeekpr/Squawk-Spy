@@ -188,7 +188,7 @@ function Guild:SendFullList()
 end
 
 function Guild:OnMessage(payload, sender)
-	if sender and Ambiguate and Ambiguate(sender, "none") == SquawkSpy.CharacterName then return end
+	if sender and SquawkSpy.CanonName(sender) == SquawkSpy.CharacterName then return end
 
 	local kind, name, note, who, stamp = strsplit(SEP, payload)
 
@@ -238,4 +238,12 @@ function Guild:Initialize()
 
 	-- Ask once, a little after login, when the guild roster is actually there.
 	C_Timer.After(8, function() Guild:RequestSync() end)
+end
+
+-- names from commands and from older copies in the guild: canonical form
+for _, method in ipairs({ "IsKoS", "Add", "Remove", "Note" }) do
+	local original = Guild[method]
+	Guild[method] = function(self, name, ...)
+		return original(self, SquawkSpy.CanonName(name) or name, ...)
+	end
 end

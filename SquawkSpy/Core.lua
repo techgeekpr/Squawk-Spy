@@ -170,6 +170,11 @@ SquawkSpy.Defaults = {
 	WindowSkin = "industrial",      -- "industrial" (Spy's art) or "classic"
 	BarTexture = "bar-flat.tga",    -- bar-flat.tga or bar-blend.tga
 
+	-- A Kill on Sight target already on the nearby list never counted as a
+	-- new sighting, so marking someone while they stood in front of you
+	-- produced no alert at all.  They re-alert on this cooldown instead.
+	KoSRepeatSeconds = 30,
+
 	SoundOnDetection = true,
 	DetectionSound = "click",
 	DisplayWarnings = true,
@@ -306,7 +311,9 @@ function SquawkSpy:InitDatabase()
 
 	local name = UnitName("player") or "Unknown"
 	local realm = GetRealmName() or "Unknown"
-	SquawkSpy.CharacterName = name
+	-- the full two-word name, for comparing against senders and detections;
+	-- the profile key keeps the old first-word form so settings carry over
+	SquawkSpy.CharacterName = SquawkSpy.UnitFullName("player") or name
 	SquawkSpy.RealmName = realm
 	SquawkSpy.CharacterKey = name .. " - " .. realm
 	SquawkSpy.FactionName = UnitFactionGroup("player") or "Alliance"
@@ -323,12 +330,74 @@ function SquawkSpy:InitDatabase()
 	SquawkSpy.data.Stats = SquawkSpy.data.Stats or {}
 	SquawkSpy.data.lastSeen = time()
 
+	for _, char in pairs(SquawkSpyDB.chars) do
+		if type(char) == "table" then SquawkSpy:FixNames(char) end
+	end
+	for _, list in pairs(SquawkSpyDB.guildKOS or {}) do
+		if type(list) == "table" then SquawkSpy:RekeyNames(list) end
+	end
+
 	SquawkSpy:ApplyTimeouts()
 end
 
 function SquawkSpy:ApplyTimeouts()
 	local t = SquawkSpy.RemoveTimeouts[SquawkSpy.db.RemoveUndetected] or SquawkSpy.RemoveTimeouts["5mins"]
 	SquawkSpy.ActiveTimeout, SquawkSpy.InactiveTimeout = t[1], t[2]
+end
+
+-- ---------------------------------------------------------------------------
+-- "Tater-Moo" -> "Tater Moo" in saved lists.  Cheap enough to run every load,
+-- which also cleans up anything an older copy in the guild sends us.
+-- ---------------------------------------------------------------------------
+
+-- Two records for one person: keep the most recent as the base and fold the
+-- other's record and fight history into it.
+local function mergePlayer(a, b)
+	if (b.time or 0) > (a.time or 0) then a, b = b, a end
+	a.wins = (a.wins or 0) + (b.wins or 0)
+	a.loses = (a.loses or 0) + (b.loses or 0)
+	for key, value in pairs(b) do
+		if a[key] == nil then a[key] = value end
+	end
+	if b.encounters then
+		a.encounters = a.encounters or {}
+		for _, entry in ipairs(b.encounters) do a.encounters[#a.encounters + 1] = entry end
+		table.sort(a.encounters, function(x, y) return (x.time or 0) < (y.time or 0) end)
+		while #a.encounters > (SquawkSpy.EncounterLimit or 50) do
+			table.remove(a.encounters, 1)
+		end
+	end
+	return a
+end
+
+function SquawkSpy:RekeyNames(list, merge)
+	local moved = {}
+	for key in pairs(list) do
+		local canon = type(key) == "string" and SquawkSpy.CanonName(key)
+		if canon and canon ~= key then moved[#moved + 1] = { key, canon } end
+	end
+	for _, pair in ipairs(moved) do
+		local old, canon = pair[1], pair[2]
+		local value = list[old]
+		list[old] = nil
+		if list[canon] ~= nil and merge and type(value) == "table" and type(list[canon]) == "table" then
+			list[canon] = merge(list[canon], value)
+		elseif list[canon] == nil then
+			list[canon] = value
+		end
+	end
+	return #moved
+end
+
+function SquawkSpy:FixNames(char)
+	if char.PlayerData then
+		SquawkSpy:RekeyNames(char.PlayerData, mergePlayer)
+		for key, player in pairs(char.PlayerData) do
+			if type(player) == "table" then player.name = key end
+		end
+	end
+	if char.KOSData then SquawkSpy:RekeyNames(char.KOSData) end
+	if char.IgnoreData then SquawkSpy:RekeyNames(char.IgnoreData) end
 end
 
 -- One-time import of the original Spy's lists, if that addon is also loaded.
@@ -854,7 +923,22 @@ function SquawkSpy:PlayerDetected(name, info, source)
 	SquawkSpy.InactiveList[name] = nil
 	SquawkSpy.LastHourList[name] = now
 
+	SquawkSpy.LastKoSAlert = SquawkSpy.LastKoSAlert or {}
+	local onKoSList = SquawkSpy:IsKoS(name)
+		or (SquawkSpy.db.guildKoS and SquawkSpy.Guild and SquawkSpy.Guild:IsKoS(name))
+
+	if not isNew and onKoSList then
+		-- Seen before, but they are Kill on Sight and still here.  That is
+		-- worth repeating, on a cooldown so a sweep cannot turn it into spam.
+		local last = SquawkSpy.LastKoSAlert[name] or 0
+		if (now - last) >= (SquawkSpy.db.KoSRepeatSeconds or 30) then
+			SquawkSpy.LastKoSAlert[name] = now
+			SquawkSpy:AlertPlayer(name, info and info.alert, source)
+		end
+	end
+
 	if isNew then
+		if onKoSList then SquawkSpy.LastKoSAlert[name] = now end
 		-- A full alert already makes noise; the blip is for everyone else.
 		if not SquawkSpy:AlertPlayer(name, info and info.alert, source) then
 			SquawkSpy:PlayDetectionSound()
@@ -953,7 +1037,7 @@ function SquawkSpy:PlayDetectionSound(force)
 
 	local entry = SquawkSpy:GetDetectionSound(SquawkSpy.db.DetectionSound)
 	if entry.file then
-		pcall(PlaySoundFile, "Interface\\AddOns\\SquawkSpy\\Sounds\\" .. entry.file, "Master")
+		SquawkSpy:PlayMedia(entry.file)
 	else
 		local id = (SOUNDKIT and entry.kit and SOUNDKIT[entry.kit]) or entry.id
 		pcall(PlaySound, id, "Master")
@@ -1046,6 +1130,45 @@ end
 
 -- Says which artwork resolved and where from, because "the window looks plain"
 -- and "Spy is not installed where I thought" look identical on screen.
+-- Plays the Kill on Sight alert and reports every step, because "no sound"
+-- has half a dozen causes that are indistinguishable from each other.
+function SquawkSpy:TestSound()
+	SquawkSpy:Print("---- sound test ----")
+	SquawkSpy:Print(("alert sounds: %s   detection blip: %s"):format(
+		SquawkSpy.db.AlertSounds and "|cff00ff00on|r" or "|cffff0000OFF - that is why|r",
+		SquawkSpy.db.SoundOnDetection and "on" or "off"))
+	SquawkSpy:Print(("alert on KoS: %s   guild KoS: %s"):format(
+		SquawkSpy.db.AlertOnKoS and "|cff00ff00on|r" or "|cffff0000OFF|r",
+		SquawkSpy.db.guildKoS and "on" or "off"))
+
+	SquawkSpy:Print(("PlaySoundFile: %s"):format(type(PlaySoundFile)))
+
+	local found = roots()
+	if #found == 0 then
+		SquawkSpy:Print("|cffff0000no media folder found|r - see |cffffd100/spy art|r")
+		return
+	end
+
+	local file = SquawkSpy.db.AlertSoundKoS or "detected-kos.mp3"
+	SquawkSpy:Print(("file: %s"):format(file))
+
+	for _, root in ipairs(found) do
+		local path = root .. "Sounds" .. "\\" .. file
+		local ok, willPlay = pcall(PlaySoundFile, path, "Master")
+		SquawkSpy:Print(("  %s -> %s (returned %s)"):format(
+			path:gsub("|", "||"),
+			ok and "|cff00ff00called|r" or "|cffff0000threw|r",
+			tostring(willPlay)))
+	end
+
+	local target = UnitExists("target") and SquawkSpy.UnitFullName("target")
+	if target then
+		SquawkSpy:Print(("target %s: personal KoS %s, guild KoS %s"):format(target,
+			SquawkSpy:IsKoS(target) and "|cff00ff00yes|r" or "no",
+			(SquawkSpy.Guild and SquawkSpy.Guild:IsKoS(target)) and "|cff00ff00yes|r" or "no"))
+	end
+end
+
 function SquawkSpy:MediaDiagnostics()
 	local found = roots()
 	SquawkSpy:Print("---- artwork and sounds ----")
@@ -1103,6 +1226,50 @@ function SquawkSpy:TextureExists(path)
 	local set = probe:GetTexture()
 	probe:SetTexture(nil)
 	return set ~= nil
+end
+
+-- A "secret" string passes type() and prints through tostring, but indexing
+-- or comparing one THROWS, and tostring hands back another secret string
+-- rather than laundering it.  string.format does launder it where the client
+-- allows, which is the difference between a name we can use and an error.
+local function usableText(text)
+	if type(text) ~= "string" then return false end
+	return (pcall(function()
+		local _ = (text == "")
+		local _ = text:sub(1, 1)
+		return true
+	end))
+end
+
+-- Forever names are two words ("Tater Moo").  UnitName hands them back split
+-- as if the second word were a realm, so they used to be stored "Tater-Moo",
+-- which /targetexact does not recognise.  A real name can never contain a
+-- hyphen, so any hyphen is that split: put the space back.
+function SquawkSpy.CanonName(name)
+	name = SquawkSpy.SafeText(name)
+	if not name then return nil end
+	name = name:gsub("%s*%-%s*", " "):gsub("%s+", " "):gsub("^ ", ""):gsub(" $", "")
+	if name == "" then return nil end
+	return name
+end
+
+-- The same, from a unit token.
+function SquawkSpy.UnitFullName(unit)
+	local rawName, rawRealm = UnitName(unit)
+	local name = SquawkSpy.SafeText(rawName)
+	if not name or name == UNKNOWNOBJECT or name == "" then return nil end
+	local second = SquawkSpy.SafeText(rawRealm)
+	if second and second ~= "" then name = name .. " " .. second end
+	return SquawkSpy.CanonName(name)
+end
+
+function SquawkSpy.SafeText(value)
+	if value == nil then return nil end
+	if usableText(value) then return value end
+
+	local ok, text = pcall(function() return ("%s"):format(value) end)
+	if ok and usableText(text) then return text end
+	return nil
 end
 
 function SquawkSpy:Print(msg)
@@ -1265,6 +1432,8 @@ function SquawkSpy:Diagnostics()
 		SquawkSpy.Detect:CountNamePlates(), SquawkSpy.Detect.DetectionCount or 0))
 	SquawkSpy:Print(("known players: %d, kill on sight: %d"):format(
 		SquawkSpy:CountTable(SquawkSpy.data.PlayerData), SquawkSpy:CountTable(SquawkSpy.data.KOSData)))
+	SquawkSpy:Print(("honour-kill messages the client hid from us: %d"):format(
+		SquawkSpy.Detect.HonorUnreadable or 0))
 end
 
 local function handleSlash(msg)
@@ -1281,8 +1450,18 @@ local function handleSlash(msg)
 		end
 	elseif cmd == "diag" or cmd == "debug" then
 		SquawkSpy:Diagnostics()
+	elseif cmd == "clicks" then
+		SquawkSpy.UI.ClickDebug = not SquawkSpy.UI.ClickDebug
+		local row = SquawkSpy.UI.MainWindow and SquawkSpy.UI.MainWindow.Rows[1]
+		SquawkSpy:Print(("click debugging %s.  secure rows: %s, protected: %s, ActionButtonUseKeyDown=%s")
+			:format(SquawkSpy.UI.ClickDebug and "|cff00ff00on|r - now click a name" or "off",
+				row and tostring(not row.insecure) or "no rows yet",
+				row and tostring(row:IsProtected()) or "?",
+				tostring(GetCVar("ActionButtonUseKeyDown"))))
 	elseif cmd == "art" or cmd == "media" then
 		SquawkSpy:MediaDiagnostics()
+	elseif cmd == "testsound" or cmd == "sound test" then
+		SquawkSpy:TestSound()
 	elseif cmd == "clear" then
 		SquawkSpy:ClearList()
 	elseif cmd == "lock" then
@@ -1377,3 +1556,22 @@ boot:SetScript("OnEvent", function(self, event, arg1)
 		if SquawkSpy.data then SquawkSpy.data.lastSeen = time() end
 	end
 end)
+
+-- ---------------------------------------------------------------------------
+-- Every entry point that takes a player name gets the canonical form, so a
+-- name typed in a command or sent by an older copy still finds its record.
+-- ---------------------------------------------------------------------------
+for _, method in ipairs({
+	"GetPlayer", "IsKoS", "IsIgnored", "UpdatePlayerData", "RecordEncounter",
+	"AddKoS", "SetKoSNote", "GetKoSNote", "SetKoSSound", "GetKoSSound",
+	"PromptKoSNote", "RemoveKoS", "AddIgnore", "RemoveIgnore",
+	"RemovePlayerFromList", "RemovePlayerData", "PlayerDetected",
+	"GetRecord", "PrintHistory",
+}) do
+	local original = SquawkSpy[method]
+	if type(original) == "function" then
+		SquawkSpy[method] = function(self, name, ...)
+			return original(self, SquawkSpy.CanonName(name) or name, ...)
+		end
+	end
+end

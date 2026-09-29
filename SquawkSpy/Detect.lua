@@ -39,27 +39,53 @@ local STEALTH_AURAS = { ["Stealth"] = true, ["Prowl"] = true, ["Shadowmeld"] = t
 
 -- Names arrive with a realm suffix for foreign-realm players; keep the same
 -- "Name-Realm" shape the original Spy stored so imported lists still match.
+-- Every detected name funnels through here, so this is where a secret
+-- string has to be turned into a usable one.  Both the gsub and the
+-- comparison below would throw on one.
 local function normalizeName(name)
-	if not name then return nil end
-	name = name:gsub(" %- ", "-")
-	if name == "" then return nil end
-	return name
+	return SquawkSpy.CanonName(name)
 end
 
+-- UnitName returns secret strings on this client.  Comparing or
+-- concatenating one throws, so both parts are laundered before use.
 local function unitName(unit)
-	local name, realm = UnitName(unit)
-	if not name or name == UNKNOWNOBJECT or name == "" then return nil end
-	if realm and realm ~= "" then return name .. "-" .. realm end
-	return name
+	return SquawkSpy.UnitFullName(unit)
+end
+
+-- Every one of these can return a secret boolean, and testing one throws
+-- outright.  Answers true, false, or nil when the client will not let us
+-- look at all.
+local function flag(fn, a, b)
+	if type(fn) ~= "function" then return nil end
+	local ok, value = pcall(fn, a, b)
+	if not ok then return nil end
+
+	local readable, result = pcall(function() return value and true or false end)
+	if not readable then return nil end
+	return result
 end
 
 local function isHostilePlayer(unit)
 	if not UnitExists(unit) then return false end
-	if not UnitIsPlayer(unit) then return false end
-	if UnitIsUnit(unit, "player") then return false end
-	if UnitIsFriend("player", unit) then return false end
+
+	-- Only a definite "no" rejects.  Unknown carries on, because missing an
+	-- enemy defeats the point of the addon, while an extra name is noise.
+	local isPlayer = flag(UnitIsPlayer, unit)
+	if isPlayer == false then return false end
+	if flag(UnitIsUnit, unit, "player") == true then return false end
+	if flag(UnitIsFriend, "player", unit) == true then return false end
+
 	-- UnitCanAttack covers duels and FFA; UnitIsEnemy covers the normal case.
-	return UnitIsEnemy("player", unit) or UnitCanAttack("player", unit)
+	local enemy = flag(UnitIsEnemy, "player", unit)
+	if enemy == true then return true end
+
+	local attackable = flag(UnitCanAttack, "player", unit)
+	if attackable == true then return true end
+
+	-- Neither readable: trust it only if we at least know it is a player, or
+	-- the list fills up with critters.
+	if enemy == nil and attackable == nil then return isPlayer == true end
+	return false
 end
 
 -- Aura fields can be secret values on this client, and comparing a secret
@@ -164,10 +190,30 @@ function Detect:ScanUnit(unit, source)
 		Detect:NoteEngaged(name, true)
 	end
 
-	local ok, dead = pcall(UnitIsDead, unit)
-	if ok and dead then
+	Detect:CheckDeath(unit, name)
+end
+
+-- Is the unit dead?  UnitIsDead can hand back a secret boolean, and testing
+-- one throws, so it goes through flag(); health 0 is the fallback.
+local function isDead(unit)
+	local dead = flag(UnitIsDead, unit)
+	if dead == nil then dead = flag(UnitIsDeadOrGhost, unit) end
+	if dead ~= nil then return dead end
+	local ok, zero = pcall(function() return UnitHealth(unit) <= 0 end)
+	if ok then return zero end
+	return nil
+end
+
+-- Deliberately not gated on isHostilePlayer: a corpse is no longer
+-- attackable, so UnitCanAttack says no the moment they die.  Being engaged
+-- with the name is the proof they were an enemy.
+function Detect:CheckDeath(unit, name)
+	name = name or normalizeName(unitName(unit))
+	if not name then return end
+	local dead = isDead(unit)
+	if dead == true then
 		Detect:NoteEnemyDeath(name)
-	elseif Detect.Dead then
+	elseif dead == false and Detect.Dead then
 		Detect.Dead[name] = nil -- back on their feet; a later kill counts again
 	end
 end
@@ -186,6 +232,20 @@ function Detect:SweepNamePlates()
 	if not SquawkSpy.db.DetectNameplates then return end
 	for i = 1, 40 do
 		Detect:ScanUnit("nameplate" .. i, "nameplate")
+	end
+end
+
+-- Our own target and focus: a long fight must keep counting as engaged (the
+-- window is only 60s), and a target killed off-plate still shows its corpse
+-- in the target frame.
+function Detect:SweepOwnTargets()
+	for _, unit in ipairs({ "target", "focus" }) do
+		if UnitExists(unit) then
+			if isHostilePlayer(unit) then
+				Detect:NoteEngaged(normalizeName(unitName(unit)), false)
+			end
+			Detect:CheckDeath(unit)
+		end
 	end
 end
 
@@ -310,6 +370,11 @@ function Detect:Initialize()
 	end)
 
 	events:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+	-- A player's plate is removed the moment they die, usually before the
+	-- 1s sweep could see the corpse.  Both events catch the death itself.
+	events:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
+	pcall(events.RegisterEvent, events, "UNIT_HEALTH")
+	pcall(events.RegisterEvent, events, "UNIT_FLAGS")
 	events:RegisterEvent("PLAYER_TARGET_CHANGED")
 	events:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
 	events:RegisterEvent("UNIT_TARGET")
@@ -342,6 +407,7 @@ function Detect:Initialize()
 	C_Timer.NewTicker(1, function()
 		if not SquawkSpy.EnabledInZone then return end
 		Detect:SweepNamePlates()
+		Detect:SweepOwnTargets()
 		Detect:SweepGroupTargets()
 	end)
 end
@@ -349,6 +415,22 @@ end
 function Detect:NAME_PLATE_UNIT_ADDED(unit)
 	if SquawkSpy.db.DetectNameplates then Detect:ScanUnit(unit, "nameplate") end
 end
+
+function Detect:NAME_PLATE_UNIT_REMOVED(unit)
+	-- the token is still valid while this handler runs
+	if unit then Detect:CheckDeath(unit) end
+end
+
+local function watchedUnit(unit)
+	return unit == "target" or unit == "focus"
+		or (type(unit) == "string" and unit:match("^nameplate%d") ~= nil)
+end
+
+function Detect:UNIT_HEALTH(unit)
+	if not watchedUnit(unit) or not next(Detect.Engaged) then return end
+	if isDead(unit) == true then Detect:CheckDeath(unit) end
+end
+Detect.UNIT_FLAGS = Detect.UNIT_HEALTH
 
 function Detect:PLAYER_TARGET_CHANGED()
 	if SquawkSpy.db.DetectTarget then Detect:ScanUnit("target", "target") end
@@ -428,7 +510,13 @@ function Detect:NoteEnemyDeath(name)
 end
 
 function Detect:CHAT_MSG_COMBAT_HONOR_GAIN(message)
-	if type(message) ~= "string" then return end
+	-- type() is not the test: a secret string passes it and then throws on
+	-- the match below.
+	message = SquawkSpy.SafeText(message)
+	if not message then
+		Detect.HonorUnreadable = (Detect.HonorUnreadable or 0) + 1
+		return
+	end
 	-- "<name> dies, honorable kill Rank: ..."
 	local name = message:match("^(.-) dies,")
 	if not name then return end

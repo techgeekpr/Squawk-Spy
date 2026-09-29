@@ -20,6 +20,53 @@ local function classColor(class)
 end
 
 -- ---------------------------------------------------------------------------
+-- dragging
+--
+-- A drag used to end only on the frame's OnMouseUp.  When that event never
+-- arrives (released over another frame, or the client swallowing it) the
+-- window stayed glued to the cursor.  Now a watcher also ends the drag as
+-- soon as the left button is no longer held, whatever frame got the release.
+--
+-- The main window has secure rows in it, which makes it protected, and a
+-- protected frame cannot be moved in combat at all -- so no drag starts then.
+-- ---------------------------------------------------------------------------
+
+local dragWatcher = CreateFrame("Frame")
+dragWatcher:Hide()
+dragWatcher:SetScript("OnUpdate", function(self)
+	if not IsMouseButtonDown("LeftButton") then
+		self:Hide()
+		local finish = self.finish
+		self.finish = nil
+		if finish then finish() end
+	end
+end)
+
+function UI:BeginDrag(frame, sizing)
+	if SquawkSpy.db.Locked then return end
+	if InCombatLockdown() and frame:IsProtected() then return end
+	if sizing then
+		frame.isResizing = true
+		frame:StartSizing(sizing)
+	else
+		frame.isMoving = true
+		frame:StartMoving()
+	end
+	dragWatcher.finish = function() UI:EndDrag(frame) end
+	dragWatcher:Show()
+end
+
+function UI:EndDrag(frame)
+	if not frame.isMoving and not frame.isResizing then return end
+	local resized = frame.isResizing
+	frame:StopMovingOrSizing()
+	frame.isMoving = false
+	frame.isResizing = false
+	UI:SavePositions()
+	if resized and frame == UI.MainWindow then UI:ResizeMainWindow() end
+end
+
+-- ---------------------------------------------------------------------------
 -- window chrome (Widgets.lua in the original)
 -- ---------------------------------------------------------------------------
 
@@ -34,18 +81,9 @@ local function createWindow(name, title, height, width)
 	f:SetClampedToScreen(true)
 
 	f:SetScript("OnMouseDown", function(self, button)
-		if not SquawkSpy.db.Locked and button == "LeftButton" then
-			self:StartMoving()
-			self.isMoving = true
-		end
+		if button == "LeftButton" then UI:BeginDrag(self) end
 	end)
-	f:SetScript("OnMouseUp", function(self)
-		if self.isMoving then
-			self:StopMovingOrSizing()
-			self.isMoving = false
-			UI:SavePositions()
-		end
-	end)
+	f:SetScript("OnMouseUp", function(self) UI:EndDrag(self) end)
 
 	f.Background = f:CreateTexture(nil, "BACKGROUND")
 	f.Background:SetTexture("Interface\\CHARACTERFRAME\\UI-Party-Background")
@@ -121,6 +159,71 @@ end
 -- rows
 -- ---------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- click-to-target
+--
+-- Two ways to target, tried in order:
+--   1. the enemy is on a unit token we can see (a nameplate, mouseover...):
+--      a plain secure "target" action on that token.  No macro involved.
+--   2. otherwise "/targetexact <name>" as macro text.
+-- Attributes can only change out of combat, so a row keeps whatever it was
+-- last armed with while the fight lasts.
+-- ---------------------------------------------------------------------------
+
+local TOKENS = { "mouseover", "target", "focus" }
+for i = 1, 40 do TOKENS[#TOKENS + 1] = "nameplate" .. i end
+
+local function tokenName(unit)
+	if not UnitExists(unit) then return nil end
+	return SquawkSpy.UnitFullName(unit)
+end
+
+local function findToken(name)
+	for _, unit in ipairs(TOKENS) do
+		if tokenName(unit) == name then return unit end
+	end
+	return nil
+end
+
+function UI:ArmRow(row)
+	if row.insecure or InCombatLockdown() then return end
+	local name = row.Name
+	local unit = name and findToken(name)
+	if unit then
+		row:SetAttribute("type1", "target")
+		row:SetAttribute("unit1", unit)
+		row:SetAttribute("unit", unit)
+	else
+		row:SetAttribute("type1", "macro")
+		row:SetAttribute("unit1", nil)
+		row:SetAttribute("unit", nil)
+		row:SetAttribute("macrotext", name and ("/targetexact " .. name) or "")
+		row:SetAttribute("macrotext1", name and ("/targetexact " .. name) or "")
+	end
+end
+
+UI.ClickDebug = false
+
+local function clickDebug(stage, row, button, down)
+	if not UI.ClickDebug then return end
+	SquawkSpy:Print(("|cffffd100click %s|r row %s  button=%s down=%s  combat=%s  type1=%s unit=%s macro=%s  keydownCVar=%s"):format(
+		stage, tostring(row.id), tostring(button), tostring(down), tostring(InCombatLockdown()),
+		tostring(row:GetAttribute("type1")), tostring(row:GetAttribute("unit1")),
+		tostring(row:GetAttribute("macrotext")),
+		tostring(GetCVar and GetCVar("ActionButtonUseKeyDown"))))
+end
+
+-- If the client refuses the action it says so through these; only shown
+-- while click debugging is on.
+local blockWatch = CreateFrame("Frame")
+blockWatch:RegisterEvent("ADDON_ACTION_BLOCKED")
+blockWatch:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+blockWatch:SetScript("OnEvent", function(_, event, addon, func)
+	if UI.ClickDebug then
+		SquawkSpy:Print(("|cffff0000%s|r addon=%s func=%s"):format(event, tostring(addon), tostring(func)))
+	end
+end)
+
 function UI:CreateRow(num)
 	local window = UI.MainWindow
 	if window.Rows[num] then return end
@@ -136,7 +239,15 @@ function UI:CreateRow(num)
 		row:SetAttribute("type1", "macro")
 		row:SetAttribute("macrotext", "")
 	end
-	row:RegisterForClicks("AnyUp")
+	-- Since Dragonflight a secure button only acts on the half of the click
+	-- that matches the ActionButtonUseKeyDown CVar.  Registering for up only
+	-- meant nothing happened for anyone casting on key down, so take both
+	-- and let the secure handler pick.
+	if row.insecure then
+		row:RegisterForClicks("AnyUp")
+	else
+		row:RegisterForClicks("AnyUp", "AnyDown")
+	end
 
 	row:SetPoint("TOPLEFT", window, "TOPLEFT", 2,
 		-34 - (SquawkSpy.db.MainWindow.RowHeight + SquawkSpy.db.MainWindow.RowSpacing) * (num - 1))
@@ -177,13 +288,19 @@ function UI:CreateRow(num)
 		end)
 	else
 		-- OnClick belongs to the secure handler; hook around it instead.
-		row:SetScript("PreClick", function(self, button)
-			if button == "LeftButton" and not InCombatLockdown() and self.Name then
-				self:SetAttribute("macrotext", "/targetexact " .. self.Name)
-			end
+		row:SetScript("PreClick", function(self, button, down)
+			if button == "LeftButton" then UI:ArmRow(self) end
+			clickDebug("pre ", self, button, down)
 		end)
-		row:SetScript("PostClick", function(self, button)
-			if button == "RightButton" and self.Name then SquawkSpy.Menu:Open(self, self.Name) end
+		-- both halves of a click arrive now; open the menu once, on release
+		row:SetScript("PostClick", function(self, button, down)
+			clickDebug("post", self, button, down)
+			if UI.ClickDebug and button == "LeftButton" then
+				SquawkSpy:Print("  target is now: " .. tostring(tokenName("target")))
+			end
+			if button == "RightButton" and not down and self.Name then
+				SquawkSpy.Menu:Open(self, self.Name)
+			end
 		end)
 	end
 
@@ -203,6 +320,7 @@ function UI:SetBar(num, name, desc, class, opacity)
 	if not row then return end
 
 	row.Name = name
+	UI:ArmRow(row)
 	row.LeftText:SetText(name)
 	row.RightText:SetText(desc)
 	row.LeftText:SetWidth(row:GetWidth() - row.RightText:GetStringWidth() - 4)
@@ -243,18 +361,9 @@ function UI:Initialize()
 	window.TitleClick:EnableMouse(true)
 	window.TitleClick:EnableMouseWheel(true)
 	window.TitleClick:SetScript("OnMouseDown", function(self, button)
-		if not SquawkSpy.db.Locked and button == "LeftButton" then
-			window:StartMoving()
-			window.isMoving = true
-		end
+		if button == "LeftButton" then UI:BeginDrag(window) end
 	end)
-	window.TitleClick:SetScript("OnMouseUp", function()
-		if window.isMoving then
-			window:StopMovingOrSizing()
-			window.isMoving = false
-			UI:SavePositions()
-		end
-	end)
+	window.TitleClick:SetScript("OnMouseUp", function() UI:EndDrag(window) end)
 	window.TitleClick:SetScript("OnMouseWheel", function(_, delta)
 		if not IsAltKeyDown() then return end
 		if delta > 0 then UI:PrevMode() else UI:NextMode() end
@@ -290,19 +399,9 @@ function UI:Initialize()
 	window.Grip:SetScript("OnEnter", function(self) self:SetAlpha(1) end)
 	window.Grip:SetScript("OnLeave", function(self) self:SetAlpha(0) end)
 	window.Grip:SetScript("OnMouseDown", function(self, button)
-		if not SquawkSpy.db.Locked and button == "LeftButton" then
-			window.isResizing = true
-			window:StartSizing("BOTTOMRIGHT")
-		end
+		if button == "LeftButton" then UI:BeginDrag(window, "BOTTOMRIGHT") end
 	end)
-	window.Grip:SetScript("OnMouseUp", function()
-		if window.isResizing then
-			window:StopMovingOrSizing()
-			window.isResizing = false
-			UI:SavePositions()
-			UI:ResizeMainWindow()
-		end
-	end)
+	window.Grip:SetScript("OnMouseUp", function() UI:EndDrag(window) end)
 	window:SetScript("OnSizeChanged", function() if window.isResizing then UI:ResizeMainWindow() end end)
 
 	window.Rows = {}
@@ -603,18 +702,9 @@ function UI:CreateAlertWindow()
 	f:SetBackdropColor(bg.r, bg.g, bg.b, bg.a)
 
 	f:SetScript("OnMouseDown", function(self, button)
-		if not SquawkSpy.db.Locked and button == "LeftButton" then
-			self:StartMoving()
-			self.isMoving = true
-		end
+		if button == "LeftButton" then UI:BeginDrag(self) end
 	end)
-	f:SetScript("OnMouseUp", function(self)
-		if self.isMoving then
-			self:StopMovingOrSizing()
-			self.isMoving = false
-			UI:SavePositions()
-		end
-	end)
+	f:SetScript("OnMouseUp", function(self) UI:EndDrag(self) end)
 
 	f.Icon = CreateFrame("Frame", nil, f, "BackdropTemplate")
 	f.Icon:SetPoint("TOPLEFT", f, "TOPLEFT", 6, -5)
@@ -746,11 +836,9 @@ end
 
 function UI:TargetName()
 	if not UnitExists("target") or not UnitIsPlayer("target") then return nil end
-	local name, realm = UnitName("target")
-	if not name then return nil end
-	if realm and realm ~= "" then return name .. "-" .. realm end
-	return name
+	return SquawkSpy.UnitFullName("target")
 end
+
 
 function UI:UpdateKoSButton()
 	local b = UI.KoSButton
